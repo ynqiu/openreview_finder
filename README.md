@@ -1,9 +1,9 @@
-# NeurIPS 2025 Paper Search
+# OpenReview Paper Search
 
-A tool for extracting and semantically searching NeurIPS 2025 conference papers using SPECTER2 embeddings.
+A tool for extracting and semantically searching papers from **any OpenReview-hosted conference** using SPECTER2 embeddings.
 
-Indexes **5,275 accepted papers** from NeurIPS 2025 using the OpenReview API v2.
-Runs a local web server on your laptop from which you can explore papers by topic.
+Supports all major ML/AI conferences including NeurIPS, ICML, ICLR, AISTATS, CVPR, ICCV, and more.
+Indexes accepted papers using the OpenReview API v2 and runs a local web server on your laptop for interactive exploration.
 
 **Developed by [Dan MacKinlay](https://danmackinlay.name) | [CSIRO](https://www.csiro.au/) (Commonwealth Scientific and Industrial Research Organisation)**
 
@@ -12,13 +12,16 @@ Runs a local web server on your laptop from which you can explore papers by topi
 
 ## Features
 
+- **Multi-conference support**: Works with all major ML/AI conferences hosted on OpenReview (NeurIPS, ICML, ICLR etc.)
 - Extract papers with full metadata from the OpenReview API
 - Create semantic embeddings using SPECTER2 (specifically designed for academic papers)
 - Build a robust search index with ChromaDB
 - Search papers by semantic similarity, not just keywords
-- Filter by authors and keywords
-- Web interface for interactive searching
+- Filter by authors and keywords (case-insensitive substring matching)
+- Web interface with multi-venue switching and clickable search history
+- Multiple output formats: plain text, CSV, JSON
 - Command-line interface for batch processing
+- Built-in API caching to reduce redundant requests
 
 ## Installation / Quickstart
 
@@ -26,14 +29,23 @@ Runs a local web server on your laptop from which you can explore papers by topi
 
 2. Clone this repository:
    ```bash
-   git clone https://github.com/danmackinlay/openreview-finder.git
-   cd openreview-finder
+   git clone https://github.com/ynqiu/openreview_finder.git
+   cd openreview_finder
    ```
-3. Index the papers (~10 minutes, one-time setup)
+3. Index papers for your desired conference (~10 minutes per conference, one-time setup)
    ```bash
+   # Default: index NeurIPS 2025
    uv run openreview-finder index
+
+   # Index other conferences using short name format
+   uv run openreview-finder --venue icml2025 index
+   uv run openreview-finder --venue iclr2026 index
+   uv run openreview-finder --venue aistats2025 index
+
+   # Or use full venue ID for custom conferences
+   uv run openreview-finder --venue "NeurIPS.cc/2025/Conference" index
    ```
-4. Launch web interface
+4. Launch web interface (supports all previously indexed conferences)
    ```bash
    uv run openreview-finder web
    ```
@@ -43,20 +55,18 @@ More options are available in the CLI help.
 ##  Examples
 
 ```bash
-# Limit to top 5 results
+# Search NeurIPS 2025 (default)
 uv run openreview-finder search "attention mechanism" --num-results 5
 
-# Filter by author
-uv run openreview-finder search "reinforcement learning" --author "Yoshua Bengio"
+# Search ICML 2025
+uv run openreview-finder --venue icml2025 search "reinforcement learning" --author "Yoshua Bengio"
 
-# Filter by keyword
-uv run openreview-finder search "graph neural networks" --keyword "attention"
+# Filter by multiple authors and keywords
+uv run openreview-finder search "graph neural networks" --author "Kaiming He" --keyword "self-supervised"
 
-# Output in JSON format
+# Output in CSV/JSON format
 uv run openreview-finder search "language models" --format json
-
-# Save results to file
-uv run openreview-finder search "diffusion models" --output results.csv
+uv run openreview-finder search "diffusion models" --format csv --output results.csv
 ```
 
 ### Example Output
@@ -77,16 +87,25 @@ $ uv run openreview-finder search "diffusion models for image generation" -n 3
 
 ## Technical Details
 
-### NeurIPS 2025 Implementation
+### Conference Support
 
-This tool uses the **OpenReview API v2**
+This tool uses the **OpenReview API v2** and supports all major ML/AI conferences:
+- NeurIPS, ICML, ICLR, AISTATS, ML4H
+- CVPR, ICCV, ECCV
+- KDD, WWW, SIGIR, SIGMOD, ICASSP
 
-- **Venue ID**: `NeurIPS.cc/2025/Conference`
+**Venue format options**:
+1. Short name format: `conference + year` (e.g. `neurips2025`, `icml2025`, `iclr2026`)
+2. Full venue ID: Direct OpenReview venue identifier (e.g. `NeurIPS.cc/2025/Conference`)
+
 - **Paper Selection**: Uses `get_all_notes(content={'venueid': venue_id})` to retrieve only accepted papers
-- **Paper Count**: 5,275 accepted papers (poster, spotlight, and oral presentations)
 - **Publication Status**: Automatically filters out submissions, withdrawn papers, and desk-rejected papers
 
-Previous versions filtered based on invitation-based filtering, but this aligns better with OpenReview's current best practices.
+### Web Interface Features
+- Multi-venue selector to switch between all indexed conferences
+- Clickable search history to quickly rerun previous queries
+- Direct links to paper PDFs, OpenReview forums, and conference-specific pages
+- Author and keyword filtering options
 
 ### SPECTER2 Embeddings
 
@@ -96,10 +115,10 @@ The first time you run the indexing command, it will download the SPECTER2 model
 
 ### Data Storage
 
-- Paper embeddings and search index are stored in `./chroma_db/neurips/`
-- API cache is stored in `./api_cache/` to reduce API calls
+- Paper embeddings and search index are stored per conference in `./chroma_db/<venue><year>/` (e.g. `./chroma_db/neurips2025/`, `./chroma_db/icml2025/`)
+- API cache is stored in `./api_cache/` to reduce API calls across all conferences
 - Logs are saved to `openreview_finder.log`
-- Database size: ~107MB for 5,275 papers with embeddings
+- Database size: ~107MB for ~5,000 papers with embeddings per conference
 
 ## Requirements
 

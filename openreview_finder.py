@@ -44,21 +44,114 @@ class VenueConfig:
     db_path: str  # e.g., "./chroma_db/neurips"
 
 
-# NeurIPS 2025 configuration
+# NeurIPS 2025 default configuration
 NEURIPS2025 = VenueConfig(
     venue_id="NeurIPS.cc/2025/Conference",
     label="NeurIPS 2025",
     collection_name="neurips2025_papers",
-    db_path="./chroma_db/neurips",
+    db_path="./chroma_db/neurips2025",
 )
+
+
+# Known conference domain mappings for common OpenReview venues
+CONFERENCE_DOMAINS = {
+    "neurips": "NeurIPS.cc",
+    "icml": "ICML.cc",
+    "iclr": "ICLR.cc",
+    "aistats": "aistats.org/AISTATS",
+    "cvpr": "thecvf.com/CVPR",
+    "iccv": "thecvf.com/ICCV",
+    "eccv": "thecvf.com/ECCV",
+    "ml4h": "ML4H.cc",
+    "kdd": "KDD.org",
+    "www": "TheWebConf.org",
+    "sigir": "SIGIR.org",
+    "sigmod": "SIGMOD.org",
+    "icassp": "IEEE.org/ICASSP",
+}
+
+
+def get_venue_config(venue_identifier: str) -> VenueConfig:
+    """
+    Get VenueConfig from a user-provided identifier.
+
+    Supports two formats:
+    1. Short name: e.g. "aistats2025", "icml2025", "iclr2026"
+    2. Full venue_id: e.g. "NeurIPS.cc/2025/Conference", "aistats.org/AISTATS/2025/Conference"
+
+    Args:
+        venue_identifier: User-provided venue identifier
+
+    Returns:
+        VenueConfig object
+    """
+    # If it's a full venue_id (contains /), use it directly
+    if "/" in venue_identifier:
+        # Extract conference name and year from venue_id
+        parts = venue_identifier.split("/")
+        # Find the year in the parts (4-digit number)
+        year = None
+        for part in parts:
+            if len(part) == 4 and part.isdigit():
+                year = part
+                break
+
+        # Get conference name from the first part
+        conf_name = parts[0].split(".")[0] if "." in parts[0] else parts[0]
+        # If first part is a domain like aistats.org, use the second part as conf name
+        if len(parts) > 1 and not parts[1].isdigit():
+            conf_name = parts[1]
+
+        if not year:
+            year = "unknown"
+
+        label = f"{conf_name.upper()} {year}"
+        collection_name = f"{conf_name.lower()}{year}_papers"
+        db_path = f"./chroma_db/{conf_name.lower()}{year}"
+
+        return VenueConfig(
+            venue_id=venue_identifier,
+            label=label,
+            collection_name=collection_name,
+            db_path=db_path,
+        )
+
+    # Otherwise, parse short name format (conference + year, e.g. aistats2025)
+    match = re.match(r"([a-zA-Z]+)(\d+)", venue_identifier.lower())
+    if not match:
+        raise ValueError(
+            f"Invalid venue format: {venue_identifier}. "
+            "Use either short name (e.g. aistats2025) or full venue_id (e.g. NeurIPS.cc/2025/Conference)"
+        )
+
+    conf_name, year = match.groups()
+    conf_name_upper = conf_name.upper()
+
+    # Use domain from mapping if available, otherwise default to .cc format
+    if conf_name in CONFERENCE_DOMAINS:
+        venue_base = CONFERENCE_DOMAINS[conf_name]
+        venue_id = f"{venue_base}/{year}/Conference"
+    else:
+        # Default format for unknown conferences
+        venue_id = f"{conf_name_upper}.cc/{year}/Conference"
+
+    label = f"{conf_name_upper} {year}"
+    collection_name = f"{conf_name}{year}_papers"
+    db_path = f"./chroma_db/{conf_name}{year}"
+
+    return VenueConfig(
+        venue_id=venue_id,
+        label=label,
+        collection_name=collection_name,
+        db_path=db_path,
+    )
 
 # ===================
 # Configuration
 # ===================
 API_CACHE_FILE = "./api_cache"
 
-# Ensure required directories exist
-os.makedirs(NEURIPS2025.db_path, exist_ok=True)
+# Directories will be created dynamically per venue
 
 # ===================
 # Logging Configuration
@@ -259,7 +352,19 @@ class CachedOpenReviewClient:
     def __init__(
         self, baseurl="https://api2.openreview.net", cache_file=API_CACHE_FILE
     ):
-        self.client = with_retry(api.OpenReviewClient)(baseurl=baseurl)
+        # Load credentials from environment variables if available
+        username = os.getenv("OPENREVIEW_USERNAME")
+        password = os.getenv("OPENREVIEW_PASSWORD")
+
+        client_kwargs = {"baseurl": baseurl}
+        if username and password:
+            client_kwargs.update({
+                "username": username,
+                "password": password
+            })
+            logger.info(f"Using OpenReview credentials for user: {username}")
+
+        self.client = with_retry(api.OpenReviewClient)(**client_kwargs)
         self.cache = diskcache.Cache(
             cache_file,
             # serializer=(compress_data, decompress_data)
@@ -315,6 +420,8 @@ class OpenReviewFinder:
 
     def __init__(self, config: VenueConfig = NEURIPS2025):
         self.config = config
+        # Ensure required directories exist
+        os.makedirs(self.config.db_path, exist_ok=True)
         self.api_client = CachedOpenReviewClient()
         # Single shared embedder for all indexing and querying
         self.embedding_function = SPECTER2Embedder()
@@ -653,7 +760,14 @@ class OpenReviewFinder:
             )
             # Use consistent color for all papers
             paper_color = "#7f8c8d"
-            neurips_url = f"https://neurips.cc/virtual/2025/loc/san-diego/papers.html?filter=title&search={quote_plus(paper['title'])}"
+            # Add conference-specific links if available
+            conf_links = ""
+            # Only show NeurIPS link for NeurIPS conferences
+            if "NeurIPS" in self.config.label:
+                year = self.config.label.split()[-1]
+                neurips_url = f"https://neurips.cc/virtual/{year}/papers.html?filter=title&search={quote_plus(paper['title'])}"
+                conf_links = f'<a href="{neurips_url}" target="_blank" style="display: inline-block; padding: 5px 10px; background-color: #9b59b6; color: white; text-decoration: none; border-radius: 3px;">{self.config.label.split()[0]}</a>'
+
             html += f"""
             <div style="margin-bottom: 25px; padding: 15px; border-left: 5px solid {paper_color}; background-color: #f9f9f9;">
                 <h3 style="margin-top: 0; color: #2c3e50;">{i + 1}. {paper["title"]} {score_display}</h3>
@@ -663,7 +777,7 @@ class OpenReviewFinder:
                 <div>
                     <a href="{paper["pdf_url"]}" target="_blank" style="display: inline-block; margin-right: 10px; padding: 5px 10px; background-color: #3498db; color: white; text-decoration: none; border-radius: 3px;">View PDF</a>
                     <a href="{paper["forum_url"]}" target="_blank" style="display: inline-block; margin-right: 10px; padding: 5px 10px; background-color: #2ecc71; color: white; text-decoration: none; border-radius: 3px;">Discussion Forum</a>
-                    <a href="{neurips_url}" target="_blank" style="display: inline-block; padding: 5px 10px; background-color: #9b59b6; color: white; text-decoration: none; border-radius: 3px;">NeurIPS</a>
+                    {conf_links}
                 </div>
             </div>
             """
@@ -674,8 +788,18 @@ class OpenReviewFinder:
         return pd.DataFrame(papers).to_csv(index=False)
 
 
-def create_gradio_interface(finder):
+def create_gradio_interface(available_venues):
     import gradio as gr
+
+    # Cache for finder instances
+    finders = {}
+
+    def get_finder(venue_name):
+        """Get or create a finder instance for the given venue"""
+        if venue_name not in finders:
+            config = get_venue_config(venue_name)
+            finders[venue_name] = OpenReviewFinder(config=config)
+        return finders[venue_name]
 
     def format_history_html(history_items):
         """Format search history as clickable HTML elements.
@@ -753,11 +877,12 @@ def create_gradio_interface(finder):
         return html
 
     def search_papers(
-        query, num_results, author_input, keyword_input, history_html=None
+        venue, query, num_results, author_input, keyword_input, history_html=None
     ):
         """Search for papers and update search history.
 
         Args:
+            venue: The selected conference venue
             query: The search query string
             num_results: Maximum number of results to return
             author_input: Comma-separated author names to filter by
@@ -768,10 +893,11 @@ def create_gradio_interface(finder):
             tuple: (html_results, history_html) where history_html is the HTML
                   representation of the search history
         """
-        # Get persistent history from our in-memory storage
-        # We need to maintain history ourselves since we're using HTML
-        if not hasattr(search_papers, "history_items"):
-            search_papers.history_items = []
+        # Get persistent history for this venue
+        history_key = f"history_{venue}"
+        if not hasattr(search_papers, history_key):
+            setattr(search_papers, history_key, [])
+        history_items = getattr(search_papers, history_key)
 
         # Parse input filters
         authors = [a.strip() for a in author_input.split(",")] if author_input else []
@@ -782,9 +908,10 @@ def create_gradio_interface(finder):
         # Skip empty queries
         if not query.strip():
             # Return current state unchanged
-            return None, format_history_html(search_papers.history_items)
+            return None, format_history_html(history_items)
 
-        # Perform search
+        # Perform search using the selected venue's finder
+        finder = get_finder(venue)
         papers = finder._query_papers(query, num_results, authors, keywords)
         html_results = finder._format_results_html(papers, query)
 
@@ -792,37 +919,65 @@ def create_gradio_interface(finder):
         history_entry = [query, f"{len(papers)} results"]
 
         # Remove this query if it already exists
-        search_papers.history_items = [
-            h for h in search_papers.history_items if h[0] != query
+        history_items = [
+            h for h in history_items if h[0] != query
         ]
 
         # Add to top of history
-        search_papers.history_items.insert(0, history_entry)
+        history_items.insert(0, history_entry)
 
         # Limit history size
-        if len(search_papers.history_items) > 15:
-            search_papers.history_items = search_papers.history_items[:15]
+        if len(history_items) > 15:
+            history_items = history_items[:15]
+
+        # Save back to the venue-specific history
+        setattr(search_papers, history_key, history_items)
 
         # Format history as HTML
-        history_html = format_history_html(search_papers.history_items)
+        history_html = format_history_html(history_items)
 
         # Return the HTML results and updated history HTML
         return html_results, history_html
 
-    with gr.Blocks(title=f"{finder.config.label} Paper Search") as app:
-        gr.Markdown(f"# {finder.config.label} Paper Search Engine")
+    def on_venue_change(venue):
+        """Update title and footer when venue changes"""
+        finder = get_finder(venue)
+        new_title = f"# {finder.config.label} Paper Search Engine"
+        new_footer = f"""
+        <div style="margin-top: 30px; padding-top: 10px; border-top: 1px solid #ddd; width: 100%;">
+            <p style="text-align: center; color: #666;">
+                <strong>{finder.config.label} Paper Search</strong> | Developed by
+                <a href="https://danmackinlay.name" target="_blank">Dan MacKinlay</a> |
+                <a href="https://www.csiro.au/" target="_blank">CSIRO</a>
+                (Commonwealth Scientific and Industrial Research Organisation)
+            </p>
+        </div>
+        """
+        # Clear results and history when switching venue
+        return new_title, "", "<div class='search-history-empty'>No previous searches</div>", new_footer
+
+    with gr.Blocks(title="OpenReview Paper Search") as app:
+        title = gr.Markdown("# OpenReview Paper Search Engine")
 
         gr.Markdown(
             "Search for papers using semantic similarity with SPECTER2 embeddings"
         )
+
         with gr.Row():
             with gr.Column(scale=3):
+                # Add venue selection dropdown (same width as search query)
+                venue_selector = gr.Dropdown(
+                    choices=available_venues,
+                    value=available_venues[0],
+                    label="Select Conference",
+                    interactive=True
+                )
                 query_input = gr.Textbox(
                     label="Search Query",
                     placeholder="Enter search query...",
                 )
                 num_results = gr.Slider(
-                    minimum=1, maximum=50, value=10, step=1, label="Number of Results"
+                    minimum=1, maximum=100, value=10, step=1, label="Number of Results"
                 )
                 author_filter = gr.Textbox(
                     label="Filter by Authors", placeholder="Separate by commas"
@@ -840,22 +995,20 @@ def create_gradio_interface(finder):
         results_display = gr.HTML(label="Results")
 
         # Add footer with credits at the bottom of the page
-        with gr.Row():
-            gr.HTML(f"""
-            <div style="margin-top: 30px; padding-top: 10px; border-top: 1px solid #ddd; width: 100%;">
-                <p style="text-align: center; color: #666;">
-                    <strong>{finder.config.label} Paper Search</strong> | Developed by
-                    <a href="https://danmackinlay.name" target="_blank">Dan MacKinlay</a> |
-                    <a href="https://www.csiro.au/" target="_blank">CSIRO</a>
-                    (Commonwealth Scientific and Industrial Research Organisation)
-                </p>
-            </div>
-            """)
+        footer = gr.HTML("")
+
+        # Handle venue change
+        venue_selector.change(
+            fn=on_venue_change,
+            inputs=[venue_selector],
+            outputs=[title, results_display, search_history, footer]
+        )
 
         # Handle regular search button clicks
         search_button.click(
             fn=search_papers,
             inputs=[
+                venue_selector,
                 query_input,
                 num_results,
                 author_filter,
@@ -869,6 +1022,7 @@ def create_gradio_interface(finder):
         query_input.submit(
             fn=search_papers,
             inputs=[
+                venue_selector,
                 query_input,
                 num_results,
                 author_filter,
@@ -881,6 +1035,7 @@ def create_gradio_interface(finder):
         author_filter.submit(
             fn=search_papers,
             inputs=[
+                venue_selector,
                 query_input,
                 num_results,
                 author_filter,
@@ -893,6 +1048,7 @@ def create_gradio_interface(finder):
         keyword_filter.submit(
             fn=search_papers,
             inputs=[
+                venue_selector,
                 query_input,
                 num_results,
                 author_filter,
@@ -900,6 +1056,13 @@ def create_gradio_interface(finder):
                 search_history,
             ],
             outputs=[results_display, search_history],
+        )
+
+        # Initialize with first venue
+        app.load(
+            fn=on_venue_change,
+            inputs=[venue_selector],
+            outputs=[title, results_display, search_history, footer]
         )
 
         # Note: We're now handling the search history clicks via JavaScript directly
@@ -918,16 +1081,25 @@ def create_gradio_interface(finder):
     count=True,
     help="Increase verbosity (use -v for verbose, -vv for debug)",
 )
+@click.option(
+    "--venue",
+    default="neurips2025",
+    help="Conference venue to use, e.g. aistats2025, icml2025, iclr2026 or full venue_id",
+)
 @click.pass_context
-def cli(ctx, verbose):
-    """NeurIPS Paper Search Utility - use semantic search on NeurIPS 2025 papers.
+def cli(ctx, verbose, venue):
+    """OpenReview Paper Search Utility - use semantic search on papers from any OpenReview conference.
+
+    Supports all major ML conferences: NeurIPS, ICML, ICLR, AISTATS, CVPR, ICCV, etc.
+    Use short names like 'aistats2025' or full venue IDs like 'NeurIPS.cc/2025/Conference'.
 
     Developed by Dan MacKinlay (https://danmackinlay.name)
     CSIRO - Commonwealth Scientific and Industrial Research Organisation
     """
-    # Store verbosity in context for subcommands
+    # Store verbosity and venue config in context for subcommands
     ctx.ensure_object(dict)
     ctx.obj["verbosity"] = verbose
+    ctx.obj["venue_config"] = get_venue_config(venue)
 
     # Setup logging based on verbosity
     global logger
@@ -939,18 +1111,22 @@ def cli(ctx, verbose):
     "--force", is_flag=True, help="Force re-indexing and re-extraction of papers"
 )
 @click.option("--batch-size", default=50, help="Batch size for indexing")
-def index(force, batch_size):
+@click.pass_context
+def index(ctx, force, batch_size):
     """Extract papers from OpenReview and build the search index."""
+    venue_config = ctx.obj["venue_config"]
     # Display attribution banner for long-running indexing operation
     click.echo("=" * 80)
-    click.echo("NeurIPS 2025 Paper Search")
+    click.echo(f"{venue_config.label} Paper Search")
     click.echo("Developed by Dan MacKinlay (https://danmackinlay.name)")
     click.echo("CSIRO - Commonwealth Scientific and Industrial Research Organisation")
     click.echo("=" * 80)
+    click.echo(f"Venue ID: {venue_config.venue_id}")
+    click.echo(f"Database path: {venue_config.db_path}")
     click.echo("")
 
     start_time = time.time()
-    finder = OpenReviewFinder()
+    finder = OpenReviewFinder(config=venue_config)
     finder.build_index(batch_size=batch_size, force=force)
     elapsed = time.time() - start_time
     click.echo(f"Indexing completed in {elapsed:.2f}s.")
@@ -973,8 +1149,10 @@ def index(force, batch_size):
     help="Output format",
 )
 @click.option("--output", "-o", help="Path to save output")
-def search(query, num_results, author, keyword, format, output):
-    finder = OpenReviewFinder()
+@click.pass_context
+def search(ctx, query, num_results, author, keyword, format, output):
+    venue_config = ctx.obj["venue_config"]
+    finder = OpenReviewFinder(config=venue_config)
     papers = finder._query_papers(query, num_results, list(author), list(keyword))
     # Choose the output format using the helper functions.
     if format == "csv":
@@ -993,12 +1171,31 @@ def search(query, num_results, author, keyword, format, output):
 
 
 @cli.command()
-def web():
+@click.pass_context
+def web(ctx):
     """Launch a Gradio web interface for searching and exploring papers."""
-    finder = OpenReviewFinder()
-    app = create_gradio_interface(finder)
-    import webbrowser
+    # Scan all locally cached venues
+    import os
+    cached_venues = []
+    chroma_db_dir = "./chroma_db"
+    if os.path.exists(chroma_db_dir):
+        for entry in os.scandir(chroma_db_dir):
+            if entry.is_dir() and not entry.name.startswith('.'):
+                # Check if this is a valid venue directory (contains index files)
+                if any(os.scandir(entry.path)):
+                    cached_venues.append(entry.name)
 
+    if not cached_venues:
+        click.echo("No cached venues found. Please run 'openreview-finder --venue <venue> index' first.")
+        return
+
+    # Sort venues alphabetically
+    cached_venues.sort()
+    click.echo(f"Found cached venues: {', '.join(cached_venues)}")
+
+    # Create interface with multi-venue support
+    app = create_gradio_interface(cached_venues)
+    import webbrowser
     webbrowser.open("http://127.0.0.1:7860/", new=2, autoraise=True)
     app.launch()
 
