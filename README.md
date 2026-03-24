@@ -7,7 +7,7 @@ Indexes accepted papers using the OpenReview API v2 and runs a local web server 
 
 **Developed by [Dan MacKinlay](https://danmackinlay.name) | [CSIRO](https://www.csiro.au/) (Commonwealth Scientific and Industrial Research Organisation)**
 
-![](search.png)
+![](websearch.png)
 
 
 ## Features
